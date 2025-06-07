@@ -1,0 +1,239 @@
+---
+title: "Data project: Himalayan mountaineering"
+author: "Kaito Miyamoto"
+format: html
+embed-resources: true
+editor_options: 
+  chunk_output_type: console
+---
+
+## Introduction
+
+The Himalaya Dataset^[https://github.com/rfordatascience/tidytuesday/blob/main/data/2025/2025-01-21/readme.md] is a detailed archive of mountaineering expeditions in the Nepalese Himalayas, originally compiled by journalist Elizabeth Hawley. Peaks, expeditions, climbing conditions, and geographical details are documented, making it an invaluable resource for analyzing historical trends in mountaineering. First published in 2004 and made freely available online in 2017, the database continues under a non-profit organization. The current dataset includes two files: peaks and expeditions, with expedition data filtered from 2020 to 2024.
+
+Based on this dataset, how have the number of successful summits and deaths changed over the years? My hypothesis is that as the years go by, with the development of technology and equipment and the sharing of information, the summit success rate will increase, but the mortality rate will decrease. I will also look at how people have changed the challenge of mountain climbing, which has affected the variation in summit success and mortality rates. Based on the `SMTDATE` remaining expedition data as an assumption, the number of successful summits and deaths will be compared throughout the year. Since the total number of people in the data does not match the sum of summits and deaths for both member and hired people, it is assumed to be retirements along the way and will not be considered in this data project.
+
+```{r}
+#| label: setup
+#| message: false
+
+library(tidyverse)
+library(gt)
+library(readxl)
+exped <- read_csv("data/exped.csv")
+peaks <- read_csv("data/peaks.csv")
+```
+
+## Summit Success and Death
+
+To see the change of summit success and death over time, I will clean the data first, picking the date reached summit and the number of member and hired person related to summit and death.
+
+```{r}
+#| label: data cleaning
+
+summit_and_death <- exped %>% 
+  filter(!is.na(SMTDATE)) %>% 
+  select(SMTDATE, TOTMEMBERS, SMTMEMBERS, MDEATHS, TOTHIRED, SMTHIRED, HDEATHS) %>% 
+  mutate(year = year(SMTDATE),
+         month = month(SMTDATE)) %>% 
+  group_by(year, month) %>% 
+  summarize(total_member_summits = sum(SMTMEMBERS, na.rm = TRUE),
+            total_member_deaths = sum(MDEATHS, na.rm = TRUE),
+            total_hired_summits = sum(SMTHIRED, na.rm = TRUE),
+            total_hired_deaths = sum(HDEATHS, na.rm = TRUE),
+            total_summits = sum(SMTMEMBERS, SMTHIRED, na.rm = TRUE),
+            total_deaths = sum(MDEATHS, HDEATHS, na.rm = TRUE),
+            total_member = sum(TOTMEMBERS, na.rm = TRUE),
+            total_hired = sum(TOTHIRED, na.rm = TRUE),
+            .groups = "drop")
+
+summit_and_death %>% 
+  head() %>% 
+  gt()
+```
+
+```{r}
+#| label: more data cleaning
+
+new_summit_death <- summit_and_death %>% 
+  select(1:8) %>% 
+  pivot_longer(cols = starts_with("total_"),
+               names_to = "label",
+               values_to = "count",
+               names_prefix = "total_") %>% 
+  complete(year, month = 1:12, 
+           label, fill = list(count = 0)) %>% 
+  mutate(date = make_date(year, month),
+         type = ifelse(label %in% c("summits", "member_summits", "hired_summits"), 
+                       "Summits", "Deaths"),
+         label = recode(label,
+                        "summits" = "Total",
+                        "deaths" = "Total",
+                        "member_summits" = "Member",
+                        "member_deaths" = "Member",
+                        "hired_summits" = "Hired",
+                        "hired_deaths" = "Hired"),
+         type = factor(type, 
+                       levels = c("Summits", "Deaths")))
+
+new_summit_death %>% 
+  head(12) %>% 
+  gt()
+```
+
+Now, I will create a plot using the cleaned data.
+
+```{r}
+#| label: line chart of the summit success and death number
+#| fig-alt: "A line chart showing the number of summit success and death for 4 years grouped by summits and deaths"
+
+ggplot(new_summit_death,
+       aes(x = date,
+           y = count,
+           color = label)) + 
+  facet_wrap(~type,
+             ncol = 1,
+             scales = "free_y") +
+  geom_line(linewidth = 1.2,
+            alpha = 0.8) +
+  labs(x = "Year",
+       y = "Total number",
+       title = "Summit Success and Death Trends Over Time",
+       color = "Label") +
+  scale_x_date(date_labels = "%Y",
+               date_breaks = "1 year") +
+  scale_color_brewer(palette = "Dark2") +
+  theme_minimal()
+```
+
+The number of successful summits reaches 1,200 in the highest month, while the maximum number of deaths is about 15. Both the number of successful summits and the number of deaths show extreme increases in numbers around May and October, consistent with the two different trekking seasons in the Himalayas described in the article, "*The Best months to Trek to Everest Base Camp*^[https://iantaylortrekking.com/blog/the-best-months-to-trek-to-everest-base-camp/#:~:text=Two%20Main%20Trekking%20Seasons,treks%20into%20Everest%20base%20camp.]": pre-monsoon (February, March, April, and May) and post-monsoon (late September, October, November, and December). Also, according to another article^[https://abcnews.go.com/International/china-shuts-mount-everest-climbers-amid-coronavirus-outbreak/story?id=69531264], the Himalayas are closed during the 2020 corona, so the numbers for this year are marvelously low compared to other years. The number of deaths varies from year to year, but the number of successful ascents has increased with each passing year.
+
+Next, I will focus on the summit success rate and mortality rate.
+
+```{r}
+#| label: summary of summit success rate and mortality rate
+
+summary_summit_death <- summit_and_death %>% 
+  group_by(year) %>% 
+  summarize(total_summits = sum(total_member_summits, total_hired_summits),
+            total_deaths = sum(total_member_deaths, total_hired_deaths),
+            total = sum(total_member, total_hired)) %>% 
+  mutate(total_summits = total_summits / total,
+         total_deaths = total_deaths / total)
+
+summary_summit_death %>% 
+  head() %>% 
+  gt()
+```
+
+```{r}
+#| label: pivot longer of summit success rate and mortality rate
+
+summary_summit_death <- summary_summit_death %>% 
+  select(year, total_summits, total_deaths) %>% 
+  pivot_longer(cols = starts_with("total_"),
+               names_to = "label",
+               values_to = "count",
+               names_prefix = "total_") %>% 
+  mutate(label = recode(label,
+                        "summits" = "Summits",
+                        "deaths" = "Deaths"),
+         label = factor(label, levels = c("Summits", "Deaths")))
+```
+
+```{r}
+#| label: column chart of summit success rate and mortality rate
+#| fig-alt: "A column chart showing the rates of summit success and mortality separated by each year"
+
+ggplot(summary_summit_death,
+       aes(x = year,
+           y = count,
+           fill = label)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~label,
+             scales = "free_y") +
+  labs(title = "Annual Summits and Deaths",
+       x = "Year",
+       y = "Proportion") +
+  scale_fill_brewer(palette = "Dark2") +
+  theme_minimal()
+```
+
+Obviously, the summit success rate in 2020 is higher and the mortality rate is lower, but this could be due to the lack of data for that year due to the corona, as discussed in the previous graph. Comparing the other years, the mortality rate varies from year to year and is generally between 0.2% and 0.5%. However, the success rate is increasing every year and will be about 60% in 2024.
+
+## Some Factors of the Summit Success Rate and Mortality Rate
+
+The data showed that the summit success rate has been increasing throughout the year, but I will look at what factors are actually causing this to be the case, focusing on Expedition high-point and Oxygen used.
+
+```{r}
+#| label: some factors data cleaning
+
+some_factors <- exped %>% 
+  filter(!is.na(SMTDATE),
+         HIGHPOINT > 0) %>% 
+  select(SMTDATE, YEAR, HIGHPOINT, O2USED, SMTDAYS)
+```
+
+
+```{r}
+#| label: scatter plot of High Point over Time by Oxygen Use
+#| message: false
+#| fig-alt: "A scatter plot showing high point of expeditions over time grouped by oxygen use"
+
+ggplot(some_factors,
+       aes(x = SMTDATE,
+           y = HIGHPOINT,
+           color = O2USED)) +
+  geom_point(size = 1.5,
+             alpha = 0.8) +
+  geom_smooth(method = "lm",
+              se = FALSE) +
+  labs(title = "High Point over Time by Oxygen Use",
+       x = "Year",
+       y = "High point",
+       color = "Oxygen used") +
+  scale_color_brewer(palette = "Dark2",
+                     direction = -1) +
+  theme_minimal()
+```
+
+This plot shows that the linear line of regression divided by oxygen use has a weak positive slope, indicating that there is no change in oxygen use throughout the year. However, there is just a positive correlation between high point and oxygen use, and the higher the high point, the higher the oxygen use, which is not related to my hypothesis. Therefore, we will analyze the results using only `HIGHPOINT` and `YEAR`.
+
+```{r}
+#| label: box plot of year and high point
+#| fig-alt: "A box plot showing high point of expedition by years"
+
+ggplot(some_factors,
+       aes(x = YEAR,
+           y = HIGHPOINT,
+           fill = factor(YEAR))) +
+  geom_boxplot(show.legend = FALSE) +
+  labs(title = "High Point by Years",
+       x = "Year",
+       y = "High point") +
+  scale_fill_brewer(palette = "Dark2") +
+  theme_minimal()
+```
+
+```{r}
+summary_year_height <- some_factors %>% 
+  group_by(YEAR) %>% 
+  summarize(average_highpoint = mean(HIGHPOINT),
+            count = n())
+
+summary_year_height %>% 
+  gt()
+```
+
+Comparing the box plot above with this table, we can see differences in the box chart from the other three because of the corona virus in 2020 and the small sample size in 2024 for the reason that the data is only available through June. In the other years, the medians are different, but the quartile ranges are the same, and the mean high points do not differ much.
+
+```{r}
+cor(some_factors$YEAR, some_factors$HIGHPOINT)
+```
+
+As can be seen from the correlation values, although there is a slight positive correlation between year and high point, there is most likely no relationship between these two data.
+
+## Conclusioin
+
+This data project analyzed the variation in summit success and mortality rates over the course of the year. Unlike my hypothesis that summit success rates would increase and mortality rates would decrease with each passing year, the results showed that summit success rates were increasing throughout the years except for 2020, while mortality rates were inconsistent. Although I compared changes in high point of expedition and oxygen availability throughout the years to find technical and knowledge aspects that contribute to higher summit success rates, there was not a sufficient correlation between year and changes in high point of expedition and oxygen availability.
+
